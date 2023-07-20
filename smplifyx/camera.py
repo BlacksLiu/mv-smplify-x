@@ -35,8 +35,79 @@ PerspParams = namedtuple('ModelOutput',
 def create_camera(camera_type='persp', **kwargs):
     if camera_type.lower() == 'persp':
         return PerspectiveCamera(**kwargs)
+    elif camera_type.lower() == 'calib':
+        return CalibratedCamera(**kwargs)
     else:
         raise ValueError('Uknown camera type: {}'.format(camera_type))
+
+
+class CalibratedCamera(nn.Module):
+
+    def __init__(self,
+                 calibs=None,
+                 scale=None,
+                 translation=None,
+                 perspective=False,
+                 batch_size=1,
+                 dtype=torch.float32,
+                 **kwargs) -> None:
+        """Camera with calibrated matrix.
+
+        Args:
+            calibs (tensor): BxVx4x4, calibrated matrix of views.
+            scale (_type_, optional): _description_. Defaults to None.
+            translate (_type_, optional): _description_. Defaults to None.
+            batch_size (int, optional): _description_. Defaults to 1.
+            dtype (_type_, optional): _description_. Defaults to torch.float32.
+        """
+        super().__init__()
+        if scale is None:
+            scale = torch.ones([batch_size, 1], dtype=dtype)
+        scale = nn.Parameter(scale, requires_grad=True)
+        self.register_parameter('scale', scale)
+
+        if translation is None:
+            translation = torch.zeros([batch_size, 3], dtype=dtype)
+        translation = nn.Parameter(translation,
+                                   requires_grad=True)
+        self.register_parameter('translation', translation)
+
+        if calibs is not None:
+            self.set_calibration_matrix(calibs)
+
+        self.perspective = perspective
+        self.dtype = dtype
+        self.batch_size = batch_size
+    
+    def set_calibration_matrix(self, calibs):
+        assert calibs.shape[0] == self.batch_size
+        calibs = torch.tensor(calibs, dtype=self.dtype)
+        calibs = calibs.to(self.scale.device)
+        self.register_buffer('calibs', calibs)
+        self.num_views = calibs.shape[1]
+    
+    def forward(self, points):
+        """Forward pass.
+
+        Args:
+            points (tensor): BxNx3.
+        """
+        points = points * self.scale[:, None, :] + self.translation[:, None, :]
+        points = points[:, None, ...].expand(-1, self.num_views, -1, -1)
+        points = torch.cat(
+            [points, torch.ones_like(points[..., :1])], dim=-1)
+        points = points @ self.calibs.transpose(-1, -2) # (B, V, N, 4) @ (B, V, 4, 4)
+
+        if self.perspective:
+            points = points[..., :3]
+            # Here, we assume the calibration matrix do not contain inverse z.
+            # If not, just comment the following line.
+            points[..., 2] = -points[..., 2]
+            points[..., 0] /= points[..., 2]
+            points[..., 1] /= points[..., 2]
+        else:
+            points = points[..., :2]
+        return points
 
 
 class PerspectiveCamera(nn.Module):

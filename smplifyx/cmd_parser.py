@@ -56,6 +56,10 @@ def parse_config(argv=None):
                         type=lambda arg: arg.lower() == 'true',
                         default=False,
                         help='Display plots while running the optimization')
+    parser.add_argument('--headless',
+                        type=lambda arg: arg.lower() == 'true',
+                        default=True,
+                        help='Offscreen rendering for visualization.')
     parser.add_argument('--degrees', type=float, default=[0, 90, 180, 270],
                         nargs='*',
                         help='Degrees of rotation for rendering the final' +
@@ -73,8 +77,8 @@ def parse_config(argv=None):
                         default='output',
                         type=str,
                         help='The folder where the output is stored')
-    parser.add_argument('--img_folder', type=str, default='images',
-                        help='The folder where the images are stored')
+    parser.add_argument('--img_folder', type=str, default='render',
+                        help='The folder where the rendered images are stored')
     parser.add_argument('--keyp_folder', type=str, default='keypoints',
                         help='The folder where the keypoints are stored')
     parser.add_argument('--summary_folder', type=str, default='summaries',
@@ -98,9 +102,12 @@ def parse_config(argv=None):
                         choices=['smpl', 'smplh', 'smplx'],
                         help='The type of the model that we will fit to the' +
                         ' data.')
-    parser.add_argument('--camera_type', type=str, default='persp',
-                        choices=['persp'],
+    parser.add_argument('--camera_type', type=str, default='calib',
+                        choices=['calib'],
                         help='The type of camera used')
+    parser.add_argument('--perspective', default=False,
+                        type=lambda x: x.lower() in ['true', '1'],
+                        help='Whether use perspective projection')
     parser.add_argument('--optim_jaw', default=True,
                         type=lambda x: x.lower() in ['true', '1'],
                         help='Optimize over the jaw pose')
@@ -278,6 +285,8 @@ def parse_config(argv=None):
                         help='The tolerance threshold for the function')
     parser.add_argument('--maxiters', type=int, default=100,
                         help='The maximum iterations for the optimization')
+    parser.add_argument('--total_iters', type=int, default=3,
+                        help='The totoal iterations for the full optimization pipeline')
 
     args = parser.parse_args(argv)
 

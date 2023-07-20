@@ -112,6 +112,7 @@ def guess_init(model,
 
 class FittingMonitor(object):
     def __init__(self, summary_steps=1, visualize=False,
+                 headless=False,
                  maxiters=100, ftol=2e-09, gtol=1e-05,
                  body_color=(1.0, 1.0, 0.9, 1.0),
                  model_type='smpl',
@@ -123,18 +124,19 @@ class FittingMonitor(object):
         self.gtol = gtol
 
         self.visualize = visualize
+        self.headless = headless
         self.summary_steps = summary_steps
         self.body_color = body_color
         self.model_type = model_type
 
     def __enter__(self):
         self.steps = 0
-        if self.visualize:
+        if self.visualize and not self.headless:
             self.mv = MeshViewer(body_color=self.body_color)
         return self
 
     def __exit__(self, exception_type, exception_value, traceback):
-        if self.visualize:
+        if self.visualize and not self.headless:
             self.mv.close_viewer()
 
     def set_colors(self, vertex_color):
@@ -206,8 +208,9 @@ class FittingMonitor(object):
                     return_verts=True, body_pose=body_pose)
                 vertices = model_output.vertices.detach().cpu().numpy()
 
-                self.mv.update_mesh(vertices.squeeze(),
-                                    body_model.faces)
+                if self.visualize and not self.headless:
+                    self.mv.update_mesh(vertices.squeeze(),
+                                        body_model.faces)
 
             prev_loss = loss.item()
 
@@ -261,8 +264,9 @@ class FittingMonitor(object):
                                           body_pose=body_pose)
                 vertices = model_output.vertices.detach().cpu().numpy()
 
-                self.mv.update_mesh(vertices.squeeze(),
-                                    body_model.faces)
+                if self.visualize and not self.headless:
+                    self.mv.update_mesh(vertices.squeeze(),
+                                        body_model.faces)
 
             return total_loss
 
@@ -273,7 +277,7 @@ def create_loss(loss_type='smplify', **kwargs):
     if loss_type == 'smplify':
         return SMPLifyLoss(**kwargs)
     elif loss_type == 'camera_init':
-        return SMPLifyCameraInitLoss(**kwargs)
+        return SMPLifyCalibratedCameraInitLoss(**kwargs)
     else:
         raise ValueError('Unknown loss type: {}'.format(loss_type))
 
@@ -368,7 +372,7 @@ class SMPLifyLoss(nn.Module):
                 **kwargs):
         projected_joints = camera(body_model_output.joints)
         # Calculate the weights for each joints
-        weights = (joint_weights * joints_conf
+        weights = (joint_weights[:, None, :] * joints_conf
                    if self.use_joints_conf else
                    joint_weights).unsqueeze(dim=-1)
 
@@ -499,5 +503,69 @@ class SMPLifyCameraInitLoss(nn.Module):
                 None):
             depth_loss = self.depth_loss_weight ** 2 * torch.sum((
                 camera.translation[:, 2] - self.trans_estimation[:, 2]).pow(2))
+
+        return joint_loss + depth_loss
+
+
+class SMPLifyCalibratedCameraInitLoss(nn.Module):
+
+    def __init__(self, init_joints_idxs,
+                 scale_estimation=None,
+                 trans_estimation=None,
+                 perspective=False,
+                 reduction='sum',
+                 data_weight=1.0,
+                 depth_loss_weight=1e2, dtype=torch.float32,
+                 **kwargs):
+        super(SMPLifyCalibratedCameraInitLoss, self).__init__()
+        self.dtype = dtype
+        self.pserspective = perspective
+
+        if scale_estimation is not None:
+            self.register_buffer(
+                'scale_estimation',
+                utils.to_tensor(scale_estimation, dtype=dtype))
+        else:
+            self.scale_estimation = scale_estimation
+
+        if trans_estimation is not None:
+            self.register_buffer(
+                'trans_estimation',
+                utils.to_tensor(trans_estimation, dtype=dtype))
+        else:
+            self.trans_estimation = trans_estimation
+        
+
+        self.register_buffer('data_weight',
+                             torch.tensor(data_weight, dtype=dtype))
+        self.register_buffer(
+            'init_joints_idxs',
+            utils.to_tensor(init_joints_idxs, dtype=torch.long))
+        self.register_buffer('depth_loss_weight',
+                             torch.tensor(depth_loss_weight, dtype=dtype))
+
+    def reset_loss_weights(self, loss_weight_dict):
+        for key in loss_weight_dict:
+            if hasattr(self, key):
+                weight_tensor = getattr(self, key)
+                weight_tensor = torch.tensor(loss_weight_dict[key],
+                                             dtype=weight_tensor.dtype,
+                                             device=weight_tensor.device)
+                setattr(self, key, weight_tensor)
+
+    def forward(self, body_model_output, camera, gt_joints,
+                **kwargs):
+        pr_joints = camera(body_model_output.joints)
+        joint_error = torch.pow(
+            torch.index_select(gt_joints, 2, self.init_joints_idxs) -
+            torch.index_select(pr_joints, 2, self.init_joints_idxs),
+            2)
+        joint_loss = torch.sum(joint_error) * self.data_weight ** 2
+
+        depth_loss = 0.0
+        # if (self.depth_loss_weight.item() > 0 and self.trans_estimation is not
+        #         None):
+        #     depth_loss = self.depth_loss_weight ** 2 * torch.sum((
+        #         camera.translation[:, 2] - self.trans_estimation[:, 2]).pow(2))
 
         return joint_loss + depth_loss

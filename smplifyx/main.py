@@ -40,6 +40,7 @@ from prior import create_prior
 
 torch.backends.cudnn.enabled = False
 
+os.environ['PYOPENGL_PLATFORM'] = 'egl'
 
 def main(**args):
     output_folder = args.pop('output_folder')
@@ -121,14 +122,13 @@ def main(**args):
     female_model = smplx.create(gender='female', **model_params)
 
     # Create the camera object
-    focal_length = args.get('focal_length')
-    camera = create_camera(focal_length_x=focal_length,
-                           focal_length_y=focal_length,
-                           dtype=dtype,
-                           **args)
+    
+    camera = create_camera(
+        dtype=dtype,
+        **args)
 
-    if hasattr(camera, 'rotation'):
-        camera.rotation.requires_grad = False
+    # if hasattr(camera, 'rotation'):
+    #     camera.rotation.requires_grad = False
 
     use_hands = args.get('use_hands', True)
     use_face = args.get('use_face', True)
@@ -200,10 +200,15 @@ def main(**args):
 
     for idx, data in enumerate(dataset_obj):
 
-        img = data['img']
+        imgs = data['imgs']
+        img_paths = data['img_paths']
+        img_fns = [osp.basename(img_path) for img_path in img_paths]
+        img_fns = [osp.splitext(img_fn)[0] for img_fn in img_fns]
         fn = data['fn']
-        keypoints = data['keypoints']
-        print('Processing: {}'.format(data['img_path']))
+        keypoints = data['keypoints'][None, :]
+        calibs = data['calibs'][None, :]
+        camera.set_calibration_matrix(calibs)
+        print('Processing: {}'.format(data['fn']))
 
         curr_result_folder = osp.join(result_folder, fn)
         if not osp.exists(curr_result_folder):
@@ -211,55 +216,51 @@ def main(**args):
         curr_mesh_folder = osp.join(mesh_folder, fn)
         if not osp.exists(curr_mesh_folder):
             os.makedirs(curr_mesh_folder)
-        for person_id in range(keypoints.shape[0]):
-            if person_id >= max_persons and max_persons > 0:
-                continue
 
-            curr_result_fn = osp.join(curr_result_folder,
-                                      '{:03d}.pkl'.format(person_id))
-            curr_mesh_fn = osp.join(curr_mesh_folder,
-                                    '{:03d}.obj'.format(person_id))
+        curr_result_fn = osp.join(curr_result_folder, f'{fn}.pkl')
+        curr_mesh_fn = osp.join(curr_mesh_folder,f'{fn}.obj')
 
-            curr_img_folder = osp.join(output_folder, 'images', fn,
-                                       '{:03d}'.format(person_id))
-            if not osp.exists(curr_img_folder):
-                os.makedirs(curr_img_folder)
+        curr_img_folder = osp.join(output_folder, 'images', fn)
+        if not osp.exists(curr_img_folder):
+            os.makedirs(curr_img_folder)
 
-            if gender_lbl_type != 'none':
-                if gender_lbl_type == 'pd' and 'gender_pd' in data:
-                    gender = data['gender_pd'][person_id]
-                if gender_lbl_type == 'gt' and 'gender_gt' in data:
-                    gender = data['gender_gt'][person_id]
-            else:
-                gender = input_gender
+        if gender_lbl_type != 'none':
+            raise NotImplementedError
+            # if gender_lbl_type == 'pd' and 'gender_pd' in data:
+            #     gender = data['gender_pd'][person_id]
+            # if gender_lbl_type == 'gt' and 'gender_gt' in data:
+            #     gender = data['gender_gt'][person_id]
+        else:
+            gender = input_gender
 
-            if gender == 'neutral':
-                body_model = neutral_model
-            elif gender == 'female':
-                body_model = female_model
-            elif gender == 'male':
-                body_model = male_model
+        if gender == 'neutral':
+            body_model = neutral_model
+        elif gender == 'female':
+            body_model = female_model
+        elif gender == 'male':
+            body_model = male_model
 
-            out_img_fn = osp.join(curr_img_folder, 'output.png')
+        # out_img_fn = osp.join(curr_img_folder, 'output.png')
+        out_img_fns = [osp.join(curr_img_folder, f'{img_fn}.png') for img_fn in img_fns]
 
-            fit_single_frame(img, keypoints[[person_id]],
-                             body_model=body_model,
-                             camera=camera,
-                             joint_weights=joint_weights,
-                             dtype=dtype,
-                             output_folder=output_folder,
-                             result_folder=curr_result_folder,
-                             out_img_fn=out_img_fn,
-                             result_fn=curr_result_fn,
-                             mesh_fn=curr_mesh_fn,
-                             shape_prior=shape_prior,
-                             expr_prior=expr_prior,
-                             body_pose_prior=body_pose_prior,
-                             left_hand_prior=left_hand_prior,
-                             right_hand_prior=right_hand_prior,
-                             jaw_prior=jaw_prior,
-                             angle_prior=angle_prior,
-                             **args)
+        fit_single_frame(imgs, keypoints,
+                        body_model=body_model,
+                        camera=camera,
+                        joint_weights=joint_weights,
+                        dtype=dtype,
+                        output_folder=output_folder,
+                        result_folder=curr_result_folder,
+                        out_img_fns=out_img_fns,
+                        result_fn=curr_result_fn,
+                        mesh_fn=curr_mesh_fn,
+                        shape_prior=shape_prior,
+                        expr_prior=expr_prior,
+                        body_pose_prior=body_pose_prior,
+                        left_hand_prior=left_hand_prior,
+                        right_hand_prior=right_hand_prior,
+                        jaw_prior=jaw_prior,
+                        angle_prior=angle_prior,
+                        **args)
 
     elapsed = time.time() - start
     time_msg = time.strftime('%H hours, %M minutes, %S seconds',
